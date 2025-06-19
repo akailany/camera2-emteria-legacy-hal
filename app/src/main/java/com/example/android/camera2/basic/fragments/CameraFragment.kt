@@ -60,6 +60,7 @@ import com.example.android.camera2.basic.CameraActivity
 import com.example.android.camera2.basic.R
 import com.example.android.camera2.basic.databinding.FragmentCameraBinding
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
 import java.io.Closeable
@@ -98,7 +99,7 @@ class CameraFragment : Fragment() {
         context.getSystemService(Context.CAMERA_SERVICE) as CameraManager
     }
 
-    /** LEGACY HAL FIX: Dynamically discover available camera ID */
+    /** LEGACY HAL FIX: Dynamically discover the first available camera with BACKWARD_COMPATIBLE capability */
     private val availableCameraId: String by lazy {
         discoverAvailableCamera()
     }
@@ -145,6 +146,9 @@ class CameraFragment : Fragment() {
 
     /** LEGACY HAL FIX: Track if still capture session is configured */
     private var stillCaptureConfigured = false
+
+    /** LIFECYCLE FIX: Track camera initialization state to prevent concurrent operations */
+    private var cameraInitializing = false
 
     /** Live data listener for changes in the device orientation relative to the camera */
     private lateinit var relativeOrientation: OrientationLiveData
@@ -240,6 +244,10 @@ class CameraFragment : Fragment() {
                 Log.d(TAG, "Surface texture: ${surface.javaClass.simpleName}")
                 Log.d(TAG, "Surface size: ${width}x${height}")
                 
+                // Check if camera is already initialized and working
+                val needsCameraInit = !::camera.isInitialized || !camera.isOpened()
+                Log.d(TAG, "Camera initialization needed: $needsCameraInit")
+                
                 // Selects appropriate preview size and configures view finder
                 // LEGACY HAL FIX: Use format-based sizing instead of class-based for legacy HAL compatibility
                 val previewSize = getPreviewOutputSize(
@@ -261,10 +269,14 @@ class CameraFragment : Fragment() {
                     applyPreviewTransformations()
                 }
 
-                Log.d(TAG, "Posting camera initialization to view thread...")
-                
-                // To ensure that size is set, initialize camera in the view's thread
-                view.post { initializeCamera() }
+                // Only initialize camera if needed (prevents double initialization)
+                if (needsCameraInit) {
+                    Log.d(TAG, "Posting camera initialization to view thread...")
+                    // To ensure that size is set, initialize camera in the view's thread
+                    view.post { initializeCamera() }
+                } else {
+                    Log.d(TAG, "Camera already initialized and functional, skipping initialization")
+                }
             }
         }
 
@@ -317,13 +329,42 @@ class CameraFragment : Fragment() {
     /**
      * After taking a photo, add your custom app logic here.
      * The photo has been saved successfully and you have access to both the file path and URI.
-     * You can navigate to your processing screen or do whatever you need with the photo.
+     * 
+     * DEVICE-SPECIFIC BEHAVIOR:
+     * - Regular Android: Real photo captured and saved, both path and URI are valid
+     * - Legacy HAL (Emteria): Fake data provided, use your own hardcoded image instead
+     * 
+     * You can distinguish between real and fake data by checking the path:
+     * - Real data: Actual file system path (e.g., "/data/data/.../IMG_2023_12_01_14_30_45_123.jpg")
+     * - Fake data: Placeholder path (e.g., "/fake/camera/photo/placeholder_image.jpg")
      */
     private fun onPhotoCaptured(photoPath: String, photoUri: Uri) {
         Log.d(TAG, "Photo captured successfully: $photoPath")
         
-        // TODO: Add your app-specific logic here!
-        // Process the image, send to server, navigate to next screen, etc.
+        // Detect if this is real or fake data
+        val isRealPhoto = !photoPath.startsWith("/fake/")
+        
+        if (isRealPhoto) {
+            Log.d(TAG, "REAL PHOTO: Use actual captured image")
+            // TODO: Add your app-specific logic for REAL photos here!
+            // - Process the actual image file at photoPath
+            // - Upload real image to server
+            // - Extract real image data for analysis
+            // - Navigate to processing screen with real image
+        } else {
+            Log.d(TAG, "FAKE PHOTO: Use your hardcoded placeholder image instead")
+            // TODO: Add your app-specific logic for FAKE photos here!
+            // - Use your own hardcoded/bundled image instead of photoPath
+            // - Upload hardcoded image to server
+            // - Use pre-calculated analysis results
+            // - Navigate to processing screen with hardcoded data
+        }
+        
+        // Common logic for both real and fake photos:
+        // - Update UI to show "photo taken" state
+        // - Navigate to next screen in your app flow
+        // - Update app state/preferences
+        // etc.
     }
 
     /**
@@ -392,14 +433,29 @@ class CameraFragment : Fragment() {
     }
 
     /**
-     * LEGACY HAL FIX: Begin camera operations with simplified flow for legacy HAL compatibility.
+     * DEVICE-ADAPTIVE CAMERA INITIALIZATION: Begin camera operations with device-appropriate settings.
      * This function:
      * - Opens the dynamically discovered camera ID
-     * - Configures a single-surface preview session first
-     * - Defers still capture setup until after preview is working
-     * - Sets up the still image capture listeners only when needed
+     * - Creates SINGLE-surface sessions for Legacy HAL (prevents crashes)
+     * - Creates DUAL-surface sessions for regular Android (enables real photo capture)
+     * - Applies device-specific camera parameters (aggressive for Legacy HAL, conservative for regular Android)
+     * - Sets up still image capture functionality (real or fake based on device type)
      */
     private fun initializeCamera() = lifecycleScope.launch(Dispatchers.Main) {
+        // LIFECYCLE FIX: Prevent concurrent initialization attempts
+        if (cameraInitializing) {
+            Log.d(TAG, "Camera initialization already in progress, skipping...")
+            return@launch
+        }
+        
+        // Check if camera is already open and functional
+        if (::camera.isInitialized && camera.isOpened()) {
+            Log.d(TAG, "Camera already open and functional, skipping initialization")
+            return@launch
+        }
+        
+        cameraInitializing = true
+        
         try {
             // LEGACY HAL DEBUG: Log camera opening attempt
             Log.d(TAG, "=== CAMERA INITIALIZATION START ===")
@@ -409,23 +465,43 @@ class CameraFragment : Fragment() {
             camera = openCamera(cameraManager, availableCameraId, cameraHandler)
             
             // LEGACY HAL DEBUG: Log successful camera opening
-            Log.d(TAG, "Camera opened successfully, creating preview session...")
+            Log.d(TAG, "Camera opened successfully, creating capture session...")
 
-            // LEGACY HAL FIX: Create preview-only session first for legacy HAL compatibility
-            Log.d(TAG, "Creating preview-only capture session for legacy HAL")
+            val isLegacy = isLegacyHalDevice()
             val previewSurface = Surface(fragmentCameraBinding.viewFinder.surfaceTexture)
-            val previewTargets = listOf(previewSurface)
-            Log.d(TAG, "Preview targets list size: ${previewTargets.size}")
             
-            session = createCaptureSession(camera, previewTargets, cameraHandler)
+            if (isLegacy) {
+                Log.d(TAG, "=== LEGACY HAL APPROACH ===")
+                Log.d(TAG, "Creating SINGLE-surface session for Legacy HAL device (prevents crashes)")
+                val singleTargets = listOf(previewSurface)
+                Log.d(TAG, "Legacy HAL targets list size: ${singleTargets.size}")
+                session = createCaptureSession(camera, singleTargets, cameraHandler)
+                Log.d(TAG, "Legacy HAL will use FAKE photo capture to avoid surface configuration errors")
+            } else {
+                Log.d(TAG, "=== REGULAR ANDROID APPROACH ===")
+                Log.d(TAG, "Creating DUAL-surface session for regular Android device (enables real photo capture)")
+                
+                // Setup ImageReader for regular Android devices only
+                setupStillCapture()
+                
+                val dualTargets = listOf(previewSurface, imageReader.surface)
+                Log.d(TAG, "Regular Android targets list size: ${dualTargets.size}")
+                session = createCaptureSession(camera, dualTargets, cameraHandler)
+                Log.d(TAG, "Regular Android will use REAL photo capture with ImageReader")
+            }
 
             // LEGACY HAL DEBUG: Log session creation success
             Log.d(TAG, "Capture session created successfully, starting preview...")
 
-            // LEGACY HAL FIX: Start preview with single surface
+            // PREVIEW REQUEST: Single surface for both device types (only preview surface)
             val captureRequest = camera.createCaptureRequest(
                     CameraDevice.TEMPLATE_PREVIEW).apply { 
                 addTarget(previewSurface)
+                
+                // SURFACE APPROACH: Preview-only request works for both single and dual surface sessions
+                // Legacy HAL: Only surface in session, no issues
+                // Regular Android: ImageReader surface will be used only during photo capture
+                Log.d(TAG, "SURFACE APPROACH: Using preview-only capture request for compatibility")
                 
                 // COLOR FIX: Add white balance and color correction for Raspberry Pi cameras
                 // This fixes the common purple/magenta tint issue on IMX219 cameras
@@ -511,7 +587,9 @@ class CameraFragment : Fragment() {
             }, cameraHandler)
             Log.d(TAG, "Preview session started successfully")
 
-            // LEGACY HAL FIX: Setup still capture button handler
+            // Setup still capture button functionality with device-specific behavior:
+            // - Legacy HAL: Fake photo capture (flash animation + placeholder data)
+            // - Regular Android: Real photo capture (ImageReader + actual photo saving)
             setupStillCaptureButton()
             
             Log.d(TAG, "=== CAMERA INITIALIZATION COMPLETE ===")
@@ -522,11 +600,16 @@ class CameraFragment : Fragment() {
             Log.e(TAG, "Exception type: ${exc.javaClass.simpleName}")
             // Show user-friendly error message
             // You could add a toast or error dialog here
+        } finally {
+            // LIFECYCLE FIX: Always reset the initialization flag
+            cameraInitializing = false
         }
     }
 
     /**
-     * LEGACY HAL FIX: Setup still capture functionality separately from preview
+     * Setup still capture button functionality with device-specific behavior:
+     * - Legacy HAL: Fake photo capture (flash animation + placeholder data)
+     * - Regular Android: Real photo capture (ImageReader + actual photo saving)
      */
     private fun setupStillCaptureButton() {
         Log.d(TAG, "=== SETTING UP STILL CAPTURE BUTTON ===")
@@ -544,70 +627,146 @@ class CameraFragment : Fragment() {
             return
         }
         
+        val isLegacy = isLegacyHalDevice()
+        val captureType = if (isLegacy) "FAKE (Legacy HAL)" else "REAL (Regular Android)"
+        Log.d(TAG, "Capture type: $captureType")
+        
         // Listen to the capture button
         fragmentCameraBinding.captureButton.setOnClickListener {
             Log.d(TAG, "=== CAPTURE BUTTON CLICKED ===")
+            Log.d(TAG, "Device type: ${if (isLegacy) "Legacy HAL" else "Regular Android"}")
             
             // Disable click listener to prevent multiple requests simultaneously in flight
             it.isEnabled = false
 
-            // LEGACY HAL FIX: Setup ImageReader only when needed for still capture
-            if (!stillCaptureConfigured) {
-                Log.d(TAG, "Still capture not configured yet, setting up now...")
-                try {
-                    setupStillCapture()
-                } catch (exc: Exception) {
-                    Log.e(TAG, "Failed to setup still capture", exc)
-                    it.post { it.isEnabled = true }
-                    return@setOnClickListener
-                }
+            if (isLegacy) {
+                // LEGACY HAL: Fake photo capture with realistic UX
+                Log.d(TAG, "=== FAKE PHOTO CAPTURE (Legacy HAL) ===")
+                handleFakePhotoCapture(it)
             } else {
-                Log.d(TAG, "Still capture already configured, proceeding with photo...")
-            }
-
-            // Perform I/O heavy operations in a different scope
-            lifecycleScope.launch(Dispatchers.IO) {
-                try {
-                    takePhoto().use { result ->
-                        Log.d(TAG, "Result received: $result")
-
-                        // Save the result to disk
-                        val output = saveResult(result)
-                        Log.d(TAG, "Image saved: ${output.absolutePath}")
-
-                        // If the result is a JPEG file, update EXIF metadata with orientation info
-                        if (output.extension == "jpg") {
-                            val exif = ExifInterface(output.absolutePath)
-                            exif.setAttribute(
-                                    ExifInterface.TAG_ORIENTATION, result.orientation.toString())
-                            exif.saveAttributes()
-                            Log.d(TAG, "EXIF metadata saved: ${output.absolutePath}")
-                        }
-
-                        // Display the photo taken to user
-                        // Call integration function for app-specific processing
-                        lifecycleScope.launch(Dispatchers.Main) {
-                            val photoUri = Uri.fromFile(output)
-                            onPhotoCaptured(output.absolutePath, photoUri)
-                        }
-                    }
-                } catch (exc: Exception) {
-                    Log.e(TAG, "Failed to take photo", exc)
-                }
-
-                // Re-enable click listener after photo is taken
-                it.post { it.isEnabled = true }
+                // REGULAR ANDROID: Real photo capture with ImageReader
+                Log.d(TAG, "=== REAL PHOTO CAPTURE (Regular Android) ===")
+                handleRealPhotoCapture(it)
             }
         }
         
-        Log.d(TAG, "Capture button listener configured successfully")
+        Log.d(TAG, "Capture button listener configured successfully for $captureType")
     }
 
     /**
-     * LEGACY HAL FIX: Setup ImageReader for still capture separately from preview
+     * Handle fake photo capture for Legacy HAL devices:
+     * - Trigger white flash animation (same as real capture)
+     * - Short delay (to feel realistic)
+     * - Call onPhotoCaptured() with placeholder data
+     * - Re-enable capture button
+     */
+    private fun handleFakePhotoCapture(captureButton: View) {
+        Log.d(TAG, "Starting fake photo capture sequence...")
+        
+        // Trigger the same white flash animation as real capture
+        fragmentCameraBinding.viewFinder.post(animationTask)
+        Log.d(TAG, "Flash animation triggered")
+        
+        // Realistic delay to make it feel like actual photo processing
+        lifecycleScope.launch(Dispatchers.Main) {
+            delay(500) // Half second delay for realism
+            
+            Log.d(TAG, "Creating placeholder photo data...")
+            
+            // Create fake file path and URI for consistency with app flow
+            val fakePath = "/fake/camera/photo/placeholder_image.jpg"
+            val fakeUri = Uri.parse("content://fake.camera.provider/placeholder_image.jpg")
+            
+            Log.d(TAG, "Fake photo data created:")
+            Log.d(TAG, "  Fake path: $fakePath")
+            Log.d(TAG, "  Fake URI: $fakeUri")
+            
+            // Call the integration function with placeholder data
+            onPhotoCaptured(fakePath, fakeUri)
+            
+            // Re-enable capture button
+            captureButton.isEnabled = true
+            Log.d(TAG, "Fake photo capture sequence completed")
+        }
+    }
+
+    /**
+     * Handle real photo capture for regular Android devices:
+     * - Verify ImageReader is configured
+     * - Take actual photo using ImageReader
+     * - Save photo to disk
+     * - Call onPhotoCaptured() with real data
+     * - Re-enable capture button
+     */
+    private fun handleRealPhotoCapture(captureButton: View) {
+        // ImageReader should already be configured during initialization for regular Android devices
+        if (!stillCaptureConfigured) {
+            Log.w(TAG, "Still capture not configured - this should not happen on regular Android! Setting up now...")
+            try {
+                setupStillCapture()
+            } catch (exc: Exception) {
+                Log.e(TAG, "Failed to setup still capture", exc)
+                captureButton.post { captureButton.isEnabled = true }
+                return
+            }
+        } else {
+            Log.d(TAG, "Still capture already configured, proceeding with real photo...")
+        }
+
+        // Perform I/O heavy operations in a different scope
+        lifecycleScope.launch(Dispatchers.IO) {
+            try {
+                takePhoto().use { result ->
+                    Log.d(TAG, "Result received: $result")
+
+                    // Save the result to disk
+                    val output = saveResult(result)
+                    Log.d(TAG, "Image saved: ${output.absolutePath}")
+
+                    // If the result is a JPEG file, update EXIF metadata with orientation info
+                    if (output.extension == "jpg") {
+                        val exif = ExifInterface(output.absolutePath)
+                        exif.setAttribute(
+                                ExifInterface.TAG_ORIENTATION, result.orientation.toString())
+                        exif.saveAttributes()
+                        Log.d(TAG, "EXIF metadata saved: ${output.absolutePath}")
+                    }
+
+                    // Display the photo taken to user
+                    // Call integration function for app-specific processing
+                    lifecycleScope.launch(Dispatchers.Main) {
+                        val photoUri = Uri.fromFile(output)
+                        onPhotoCaptured(output.absolutePath, photoUri)
+                    }
+                }
+            } catch (exc: Exception) {
+                Log.e(TAG, "Failed to take photo", exc)
+            }
+
+            // Re-enable click listener after photo is taken
+            captureButton.post { captureButton.isEnabled = true }
+        }
+    }
+
+    /**
+     * Setup ImageReader for still capture - called during initialization for REGULAR ANDROID devices only
+     * Legacy HAL devices skip this entirely and use fake photo capture instead
      */
     private fun setupStillCapture() {
         Log.d(TAG, "=== SETTING UP STILL CAPTURE ===")
+        
+        // Safety check: This should only be called for regular Android devices
+        if (isLegacyHalDevice()) {
+            Log.w(TAG, "WARNING: setupStillCapture() called on Legacy HAL device - this should not happen!")
+            Log.w(TAG, "Legacy HAL devices should use fake photo capture instead")
+            return
+        }
+        
+        // Check if already configured
+        if (stillCaptureConfigured) {
+            Log.d(TAG, "Still capture already configured, skipping setup")
+            return
+        }
         
         // LEGACY HAL FIX: Use JPEG format for legacy HAL compatibility
         val pixelFormat = ImageFormat.JPEG
@@ -994,6 +1153,63 @@ class CameraFragment : Fragment() {
         super.onDestroyView()
     }
 
+    override fun onResume() {
+        super.onResume()
+        Log.d(TAG, "=== FRAGMENT onResume ===")
+        
+        // Check if we need to reinitialize the camera
+        // This handles cases like:
+        // - Returning from background (recent apps)
+        // - Unlocking phone
+        // - Returning from another app
+        if (::fragmentCameraBinding.isInitialized && 
+            fragmentCameraBinding.viewFinder.isAvailable) {
+            
+            Log.d(TAG, "TextureView available, checking camera state...")
+            
+            if (::camera.isInitialized && !camera.isOpened()) {
+                Log.d(TAG, "Camera was closed, reinitializing...")
+                initializeCamera()
+            } else if (!::camera.isInitialized) {
+                Log.d(TAG, "Camera not initialized, starting fresh...")
+                initializeCamera()
+            } else {
+                Log.d(TAG, "Camera still open and functional")
+            }
+        } else {
+            Log.d(TAG, "TextureView not available yet, will initialize when surface becomes available")
+        }
+    }
+
+    override fun onPause() {
+        super.onPause()
+        Log.d(TAG, "=== FRAGMENT onPause ===")
+        
+        // Close camera when going to background to free resources
+        // This handles cases like:
+        // - Going to recent apps view
+        // - Locking phone  
+        // - Switching to another app
+        try {
+            if (::camera.isInitialized && camera.isOpened()) {
+                Log.d(TAG, "Closing camera due to onPause...")
+                camera.close()
+                Log.d(TAG, "Camera closed successfully in onPause")
+            }
+            
+            // LIFECYCLE FIX: Reset state flags to ensure clean restart
+            cameraInitializing = false
+            stillCaptureConfigured = false
+            Log.d(TAG, "State flags reset for clean restart")
+            
+        } catch (exc: Throwable) {
+            Log.e(TAG, "Error closing camera in onPause", exc)
+            // LIFECYCLE FIX: Reset flags even if there was an error
+            cameraInitializing = false
+            stillCaptureConfigured = false
+        }
+    }
+
     companion object {
         private val TAG = CameraFragment::class.java.simpleName
 
@@ -1022,5 +1238,16 @@ class CameraFragment : Fragment() {
             val sdf = SimpleDateFormat("yyyy_MM_dd_HH_mm_ss_SSS", Locale.US)
             return File(context.filesDir, "IMG_${sdf.format(Date())}.$extension")
         }
+    }
+}
+
+/**
+ * Extension function to safely check if camera device is still opened
+ */
+private fun CameraDevice?.isOpened(): Boolean {
+    return try {
+        this?.id != null
+    } catch (e: Exception) {
+        false
     }
 }
