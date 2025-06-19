@@ -1,0 +1,2 @@
+    /**
+     * After taking a photo, add logic to go to bolus dosage calculation here.
