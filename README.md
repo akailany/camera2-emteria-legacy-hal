@@ -122,14 +122,47 @@ The camera is ready for your app integration via this function in `CameraFragmen
 /**
  * After taking a photo, add your custom app logic here.
  * The photo has been saved successfully and you have access to both the file path and URI.
- * You can navigate to your processing screen or do whatever you need with the photo.
+ * 
+ * DEVICE-SPECIFIC BEHAVIOR:
+ * - Legacy HAL (Emteria): Always uses fake data (no real photos captured)
+ * - Regular Android: Uses real or fake data based on FORCE_FAKE_PHOTO_DATA flag
+ * 
+ * You can distinguish between real and fake data by checking the path:
+ * - Real data: Actual file system path (e.g., "/data/data/.../IMG_2023_12_01_14_30_45_123.jpg")
+ * - Fake data: Placeholder path (e.g., "/fake/camera/photo/placeholder_image.jpg")
  */
 private fun onPhotoCaptured(photoPath: String, photoUri: Uri) {
     Log.d(TAG, "Photo captured successfully: $photoPath")
     
-    // TODO: Add your app-specific logic here!
-    // Process the image, send to server, navigate to next screen, etc.
+    // Detect if this is real or fake data
+    val isRealPhoto = !photoPath.startsWith("/fake/")
+    
+    if (isRealPhoto) {
+        // TODO: Add your app-specific logic for REAL photos here!
+        // Process the actual image file at photoPath
+        // Upload real image to server
+        // Extract real image data for analysis
+    } else {
+        // TODO: Add your app-specific logic for FAKE photos here!
+        // Use your own hardcoded/bundled image instead of photoPath
+        // Upload hardcoded image to server
+        // Use pre-calculated analysis results
+    }
 }
+```
+
+### 5. Configure Photo Data Behavior
+
+Choose the appropriate photo data handling for your use case in `CameraFragment.kt`:
+
+```kotlin
+// For production (default)
+private val FORCE_FAKE_PHOTO_DATA = false
+// Result: Legacy HAL uses fake data, Regular Android uses real photos
+
+// For testing integration flows
+private val FORCE_FAKE_PHOTO_DATA = true
+// Result: All devices use fake data (faster testing, no file I/O)
 ```
 
 ## Application Integration Examples
@@ -147,8 +180,232 @@ private fun onPhotoCaptured(photoPath: String, photoUri: Uri) {
     )
     navController.navigate(action)
 }
+```
+
+### Example: Handle Real vs Fake Photo Data
+
+```kotlin
+private fun onPhotoCaptured(photoPath: String, photoUri: Uri) {
+    Log.d(TAG, "Photo captured successfully: $photoPath")
+    
+    // Detect data type
+    val isRealPhoto = !photoPath.startsWith("/fake/")
+    
+    if (isRealPhoto) {
+        // Handle real photo data
+        processRealPhoto(photoPath, photoUri)
+    } else {
+        // Handle fake photo data
+        processFakePhoto()
+    }
+}
+
+private fun processRealPhoto(photoPath: String, photoUri: Uri) {
+    // Use actual captured image
+    lifecycleScope.launch(Dispatchers.IO) {
+        // Process the real image file
+        val bitmap = BitmapFactory.decodeFile(photoPath)
+        
+        // Upload to server or process locally
+        uploadImageToServer(photoPath)
+        
+        // Navigate with real data
+        lifecycleScope.launch(Dispatchers.Main) {
+            val action = CameraFragmentDirections.actionCameraToResults(
+                imagePath = photoPath,
+                imageUri = photoUri.toString(),
+                isRealData = true
+            )
+            navController.navigate(action)
+        }
+    }
+}
+
+private fun processFakePhoto() {
+    // Use your bundled placeholder image
+    val placeholderImageRes = R.drawable.sample_food_image
+    
+    // Use pre-calculated results for testing
+    val mockAnalysisResults = AnalysisResults(
+        calories = 450,
+        carbs = 45.0,
+        protein = 12.0,
+        fat = 15.0
+    )
+    
+    // Navigate with fake data
+    val action = CameraFragmentDirections.actionCameraToResults(
+        imagePath = "", // Empty since using resource
+        imageResource = placeholderImageRes,
+        analysisResults = mockAnalysisResults,
+        isRealData = false
+    )
+    navController.navigate(action)
+}
+```
+
+### Example: Upload Strategy Based on Data Type
+
+```kotlin
+private fun onPhotoCaptured(photoPath: String, photoUri: Uri) {
+    val isRealPhoto = !photoPath.startsWith("/fake/")
+    val deviceType = if (isLegacyHalDevice()) "Legacy HAL" else "Regular Android"
+    
+    when {
+        isRealPhoto -> {
+            // Upload actual captured image
+            uploadRealImageToServer(photoPath)
+        }
+        deviceType == "Legacy HAL" -> {
+            // Legacy HAL device - use predetermined image
+            uploadPlaceholderImage("legacy_hal_sample.jpg")
+        }
+        else -> {
+            // Regular Android with forced fake data - testing mode
+            uploadPlaceholderImage("test_sample.jpg")
+        }
+    }
+}
+
+private fun uploadRealImageToServer(filePath: String) {
+    lifecycleScope.launch(Dispatchers.IO) {
+        try {
+            val file = File(filePath)
+            val response = apiService.uploadImage(file)
+            Log.d(TAG, "Real image uploaded: ${response.imageId}")
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to upload real image", e)
+        }
+    }
+}
+
+private fun uploadPlaceholderImage(placeholderName: String) {
+    lifecycleScope.launch(Dispatchers.IO) {
+        try {
+            // Use your bundled placeholder image
+            val response = apiService.processPlaceholderImage(placeholderName)
+            Log.d(TAG, "Placeholder image processed: ${response.analysisId}")
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to process placeholder image", e)
+        }
+    }
+}
+```
+
+### Example: Development vs Production Configuration
+
+```kotlin
+class CameraFragment : Fragment() {
+    
+    companion object {
+        // Production configuration
+        private const val PRODUCTION_MODE = BuildConfig.DEBUG.not()
+        
+        // Automatically set fake data based on build type
+        private val FORCE_FAKE_PHOTO_DATA = !PRODUCTION_MODE
+    }
+    
+    private fun onPhotoCaptured(photoPath: String, photoUri: Uri) {
+        val isRealPhoto = !photoPath.startsWith("/fake/")
+        
+        when {
+            PRODUCTION_MODE && isRealPhoto -> {
+                // Production with real photos
+                handleProductionPhoto(photoPath, photoUri)
+            }
+            !PRODUCTION_MODE -> {
+                // Development/testing mode
+                handleTestingPhoto(photoPath, photoUri)
+            }
+            else -> {
+                // Fallback for edge cases
+                handleFallbackPhoto()
+            }
+        }
+    }
+}
+```
 
 ## Configuration Options
+
+### Photo Data Handling
+
+The app supports different photo data handling modes based on platform and configuration:
+
+#### Platform-Specific Behavior
+
+**Emteria OS / Legacy HAL Devices**
+- Always use fake photo data (no real photos captured)
+- Camera limitations prevent actual photo capture
+- Flash animation provides visual feedback
+- `onPhotoCaptured()` called with placeholder data
+
+**Regular Android Devices**
+- Default: Real photo capture with actual file saving
+- Optional: Fake photo data for testing integration flows
+- Full camera functionality available
+
+#### Force Fake Photo Data Option
+
+For testing and integration purposes, you can force all devices to use fake photo data:
+
+```kotlin
+// Set to true to use fake photo data even on regular Android devices
+// This allows testing integration flows without real photo processing
+// - true: Always use fake data (both Legacy HAL and Regular Android)
+// - false: Use real data on Regular Android, fake data on Legacy HAL (default)
+private val FORCE_FAKE_PHOTO_DATA = false
+```
+
+**Use Cases for FORCE_FAKE_PHOTO_DATA = true:**
+- Testing app integration logic without real file I/O
+- Faster development cycles (no photo processing overhead)
+- Consistent data flow across all platforms during testing
+- Debugging integration workflows
+
+#### Data Flow Comparison
+
+| Platform | FORCE_FAKE_PHOTO_DATA | Photo Capture | Data Passed to onPhotoCaptured() |
+|----------|----------------------|---------------|-----------------------------------|
+| Emteria OS | false (default) | Fake (flash only) | Fake path and URI |
+| Emteria OS | true | Fake (flash only) | Fake path and URI |
+| Regular Android | false (default) | Real camera capture | Real file path and URI |
+| Regular Android | true | Fake (flash only) | Fake path and URI |
+
+#### Integration Function Data Types
+
+The `onPhotoCaptured()` function receives different data based on configuration:
+
+```kotlin
+private fun onPhotoCaptured(photoPath: String, photoUri: Uri) {
+    Log.d(TAG, "Photo captured successfully: $photoPath")
+    
+    // Detect if this is real or fake data
+    val isRealPhoto = !photoPath.startsWith("/fake/")
+    val deviceType = if (isLegacyHalDevice()) "Legacy HAL" else "Regular Android"
+    val dataType = if (isRealPhoto) "REAL" else "FAKE"
+    
+    Log.d(TAG, "Device: $deviceType, Data: $dataType")
+    
+    if (isRealPhoto) {
+        // Real photo data - actual file system path and URI
+        // photoPath: "/data/data/.../IMG_2025_06_19_14_43_47_294.jpg"
+        // photoUri: "file:///data/data/.../IMG_2025_06_19_14_43_47_294.jpg"
+        
+        // Process the actual image file
+        // Upload real image to server
+        // Extract real image data for analysis
+    } else {
+        // Fake photo data - placeholder path and URI
+        // photoPath: "/fake/camera/photo/placeholder_image.jpg"
+        // photoUri: "content://fake.camera.provider/placeholder_image.jpg"
+        
+        // Use your own hardcoded/bundled image instead
+        // Upload hardcoded image to server
+        // Use pre-calculated analysis results
+    }
+}
+```
 
 ### Camera Orientation
 

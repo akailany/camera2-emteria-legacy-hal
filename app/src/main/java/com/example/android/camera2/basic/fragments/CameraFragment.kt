@@ -161,13 +161,21 @@ class CameraFragment : Fragment() {
     // This applies auto white balance and color correction to both preview and still capture
     private val ENABLE_COLOR_CORRECTION = true
     
+    // INTEGRATION FIX: Set to true to use fake photo data even on regular Android devices
+    // This allows testing integration flows without real photo processing
+    // - true: Always use fake data (both Legacy HAL and Regular Android)
+    // - false: Use real data on Regular Android, fake data on Legacy HAL (default)
+    private val FORCE_FAKE_PHOTO_DATA = false
+    
     // COLOR FIX: Detect if we're on a legacy HAL device (like Raspberry Pi) vs regular Android
     private fun isLegacyHalDevice(): Boolean {
         return try {
             // Check if camera ID is non-standard (like "1000" on Raspberry Pi)
             val cameraId = availableCameraId
             val isNonStandard = cameraId != "0" && cameraId != "1"
-            Log.d(TAG, "Device type detection: Camera ID = '$cameraId', Legacy HAL = $isNonStandard")
+            Log.d(TAG, "=== DEVICE TYPE DETECTION ===")
+            Log.d(TAG, "Camera ID = '$cameraId', Legacy HAL = $isNonStandard")
+            Log.d(TAG, "=== DEVICE TYPE DETECTION COMPLETE ===")
             isNonStandard
         } catch (e: Exception) {
             Log.w(TAG, "Could not determine device type, defaulting to regular Android: ${e.message}")
@@ -177,10 +185,42 @@ class CameraFragment : Fragment() {
     
     // COLOR FIX: Get appropriate white balance mode for device type
     private fun getColorAwbMode(): Int {
-        return if (isLegacyHalDevice()) {
+        val isLegacy = isLegacyHalDevice()
+        val awbMode = if (isLegacy) {
             CaptureRequest.CONTROL_AWB_MODE_DAYLIGHT  // Aggressive for Raspberry Pi
         } else {
             CaptureRequest.CONTROL_AWB_MODE_AUTO      // Conservative for regular Android
+        }
+        val modeStr = when(awbMode) {
+            CaptureRequest.CONTROL_AWB_MODE_DAYLIGHT -> "DAYLIGHT"
+            CaptureRequest.CONTROL_AWB_MODE_AUTO -> "AUTO"
+            else -> "UNKNOWN"
+        }
+        Log.d(TAG, "getColorAwbMode: Device=${if (isLegacy) "Legacy HAL" else "Regular Android"}, Mode=$modeStr")
+        return awbMode
+    }
+
+    /**
+     * Helper function to safely check if camera device is still opened and functional
+     */
+    private fun isCameraOpened(): Boolean {
+        return try {
+            // Check if camera is initialized first
+            if (!::camera.isInitialized) {
+                Log.d(TAG, "Camera not initialized")
+                return false
+            }
+            
+            // Try to create a capture request - this will fail if camera is closed
+            val testRequest = camera.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW)
+            testRequest.build() // This should succeed if camera is functional
+            
+            Log.d(TAG, "Camera is functional")
+            true
+        } catch (e: Exception) {
+            // If any exception occurs, camera is not functional
+            Log.d(TAG, "Camera not functional: ${e.javaClass.simpleName} - ${e.message}")
+            false
         }
     }
 
@@ -202,6 +242,12 @@ class CameraFragment : Fragment() {
             Log.d(TAG, "COLOR FIX: ENABLED for $deviceType")
         } else {
             Log.d(TAG, "COLOR FIX: DISABLED")
+        }
+        
+        if (FORCE_FAKE_PHOTO_DATA) {
+            Log.d(TAG, "INTEGRATION FIX: FORCE_FAKE_PHOTO_DATA enabled - all devices will use fake photo data")
+        } else {
+            Log.d(TAG, "INTEGRATION FIX: FORCE_FAKE_PHOTO_DATA disabled - Legacy HAL uses fake data, Regular Android uses real data")
         }
         
         _fragmentCameraBinding = FragmentCameraBinding.inflate(inflater, container, false)
@@ -245,7 +291,7 @@ class CameraFragment : Fragment() {
                 Log.d(TAG, "Surface size: ${width}x${height}")
                 
                 // Check if camera is already initialized and working
-                val needsCameraInit = !::camera.isInitialized || !camera.isOpened()
+                val needsCameraInit = !::camera.isInitialized || !isCameraOpened()
                 Log.d(TAG, "Camera initialization needed: $needsCameraInit")
                 
                 // Selects appropriate preview size and configures view finder
@@ -331,8 +377,8 @@ class CameraFragment : Fragment() {
      * The photo has been saved successfully and you have access to both the file path and URI.
      * 
      * DEVICE-SPECIFIC BEHAVIOR:
-     * - Regular Android: Real photo captured and saved, both path and URI are valid
-     * - Legacy HAL (Emteria): Fake data provided, use your own hardcoded image instead
+     * - Legacy HAL (Emteria): Always uses fake data (no real photos captured)
+     * - Regular Android: Uses real or fake data based on FORCE_FAKE_PHOTO_DATA flag
      * 
      * You can distinguish between real and fake data by checking the path:
      * - Real data: Actual file system path (e.g., "/data/data/.../IMG_2023_12_01_14_30_45_123.jpg")
@@ -343,9 +389,15 @@ class CameraFragment : Fragment() {
         
         // Detect if this is real or fake data
         val isRealPhoto = !photoPath.startsWith("/fake/")
+        val deviceType = if (isLegacyHalDevice()) "Legacy HAL" else "Regular Android"
+        val dataType = if (isRealPhoto) "REAL" else "FAKE"
+        
+        Log.d(TAG, "Device: $deviceType, Data: $dataType")
         
         if (isRealPhoto) {
             Log.d(TAG, "REAL PHOTO: Use actual captured image")
+            Log.d(TAG, "  Real file path: $photoPath")
+            Log.d(TAG, "  Real URI: $photoUri")
             // TODO: Add your app-specific logic for REAL photos here!
             // - Process the actual image file at photoPath
             // - Upload real image to server
@@ -353,6 +405,8 @@ class CameraFragment : Fragment() {
             // - Navigate to processing screen with real image
         } else {
             Log.d(TAG, "FAKE PHOTO: Use your hardcoded placeholder image instead")
+            Log.d(TAG, "  Fake file path: $photoPath")
+            Log.d(TAG, "  Fake URI: $photoUri")
             // TODO: Add your app-specific logic for FAKE photos here!
             // - Use your own hardcoded/bundled image instead of photoPath
             // - Upload hardcoded image to server
@@ -449,7 +503,7 @@ class CameraFragment : Fragment() {
         }
         
         // Check if camera is already open and functional
-        if (::camera.isInitialized && camera.isOpened()) {
+        if (::camera.isInitialized && isCameraOpened()) {
             Log.d(TAG, "Camera already open and functional, skipping initialization")
             return@launch
         }
@@ -469,6 +523,16 @@ class CameraFragment : Fragment() {
 
             val isLegacy = isLegacyHalDevice()
             val previewSurface = Surface(fragmentCameraBinding.viewFinder.surfaceTexture)
+            
+            // SURFACE FIX: Ensure TextureView buffer is properly configured on reinitialization
+            val previewSize = getPreviewOutputSize(
+                fragmentCameraBinding.viewFinder.display,
+                characteristics,
+                SurfaceTexture::class.java,
+                ImageFormat.PRIVATE
+            )
+            fragmentCameraBinding.viewFinder.surfaceTexture?.setDefaultBufferSize(previewSize.width, previewSize.height)
+            Log.d(TAG, "SURFACE FIX: Set TextureView buffer size to ${previewSize.width}x${previewSize.height}")
             
             if (isLegacy) {
                 Log.d(TAG, "=== LEGACY HAL APPROACH ===")
@@ -506,28 +570,44 @@ class CameraFragment : Fragment() {
                 // COLOR FIX: Add white balance and color correction for Raspberry Pi cameras
                 // This fixes the common purple/magenta tint issue on IMX219 cameras
                 if (ENABLE_COLOR_CORRECTION) {
+                    Log.d(TAG, "=== APPLYING COLOR CORRECTION ===")
                     val isLegacy = isLegacyHalDevice()
+                    Log.d(TAG, "Device type for color correction: ${if (isLegacy) "Legacy HAL" else "Regular Android"}")
+                    
                     if (isLegacy) {
                         Log.d(TAG, "COLOR FIX: Applying AGGRESSIVE settings for legacy HAL device")
                         
                         // Aggressive settings for Raspberry Pi / legacy HAL
-                        set(CaptureRequest.CONTROL_AWB_MODE, getColorAwbMode())
+                        val awbMode = getColorAwbMode()
+                        set(CaptureRequest.CONTROL_AWB_MODE, awbMode)
                         set(CaptureRequest.COLOR_CORRECTION_MODE, CaptureRequest.COLOR_CORRECTION_MODE_TRANSFORM_MATRIX)
                         set(CaptureRequest.CONTROL_SCENE_MODE, CaptureRequest.CONTROL_SCENE_MODE_DISABLED)
                         set(CaptureRequest.CONTROL_EFFECT_MODE, CaptureRequest.CONTROL_EFFECT_MODE_OFF)
+                        
+                        Log.d(TAG, "Applied Legacy HAL settings:")
+                        Log.d(TAG, "  - AWB Mode: $awbMode")
+                        Log.d(TAG, "  - Color Correction: TRANSFORM_MATRIX")
+                        Log.d(TAG, "  - Scene Mode: DISABLED")
+                        Log.d(TAG, "  - Effect Mode: OFF")
                     } else {
                         Log.d(TAG, "COLOR FIX: Applying CONSERVATIVE settings for regular Android device")
                         
                         // Conservative settings for regular Android devices
-                        set(CaptureRequest.CONTROL_AWB_MODE, getColorAwbMode())
+                        val awbMode = getColorAwbMode()
+                        set(CaptureRequest.CONTROL_AWB_MODE, awbMode)
                         set(CaptureRequest.COLOR_CORRECTION_MODE, CaptureRequest.COLOR_CORRECTION_MODE_FAST)
                         // Don't set scene mode for regular devices - let them use default
+                        
+                        Log.d(TAG, "Applied Regular Android settings:")
+                        Log.d(TAG, "  - AWB Mode: $awbMode")
+                        Log.d(TAG, "  - Color Correction: FAST")
                     }
                     
                     // Common settings for both device types
                     set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_ON)
                     set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE)
                     set(CaptureRequest.CONTROL_MODE, CaptureRequest.CONTROL_MODE_AUTO)
+                    Log.d(TAG, "Applied common settings: AE=ON, AF=CONTINUOUS_PICTURE, MODE=AUTO")
                     
                     val awbModeStr = when(getColorAwbMode()) {
                         CaptureRequest.CONTROL_AWB_MODE_DAYLIGHT -> "DAYLIGHT"
@@ -537,7 +617,8 @@ class CameraFragment : Fragment() {
                         else -> "UNKNOWN"
                     }
                     val deviceType = if (isLegacy) "Legacy HAL" else "Regular Android"
-                    Log.d(TAG, "COLOR FIX: Applied $awbModeStr white balance for $deviceType device")
+                    Log.d(TAG, "=== COLOR CORRECTION COMPLETE ===")
+                    Log.d(TAG, "Final: Applied $awbModeStr white balance for $deviceType device")
                 } else {
                     Log.d(TAG, "COLOR FIX: Skipped (disabled)")
                 }
@@ -592,6 +673,15 @@ class CameraFragment : Fragment() {
             // - Regular Android: Real photo capture (ImageReader + actual photo saving)
             setupStillCaptureButton()
             
+            // REINITIALIZATION FIX: Reapply transformations after camera restart
+            // This ensures visual settings like aspect ratio and rotation are restored
+            lifecycleScope.launch(Dispatchers.Main) {
+                // Small delay to ensure session is fully established
+                delay(100)
+                applyPreviewTransformations()
+                Log.d(TAG, "REINITIALIZATION FIX: Transformations reapplied after camera restart")
+            }
+            
             Log.d(TAG, "=== CAMERA INITIALIZATION COMPLETE ===")
 
         } catch (exc: Exception) {
@@ -628,23 +718,33 @@ class CameraFragment : Fragment() {
         }
         
         val isLegacy = isLegacyHalDevice()
-        val captureType = if (isLegacy) "FAKE (Legacy HAL)" else "REAL (Regular Android)"
+        val useFakeData = isLegacy || FORCE_FAKE_PHOTO_DATA
+        val captureType = if (useFakeData) {
+            if (isLegacy) "FAKE (Legacy HAL)" else "FAKE (Regular Android - forced)"
+        } else {
+            "REAL (Regular Android)"
+        }
         Log.d(TAG, "Capture type: $captureType")
+        Log.d(TAG, "FORCE_FAKE_PHOTO_DATA flag: $FORCE_FAKE_PHOTO_DATA")
         
         // Listen to the capture button
         fragmentCameraBinding.captureButton.setOnClickListener {
             Log.d(TAG, "=== CAPTURE BUTTON CLICKED ===")
             Log.d(TAG, "Device type: ${if (isLegacy) "Legacy HAL" else "Regular Android"}")
+            Log.d(TAG, "Force fake data: $FORCE_FAKE_PHOTO_DATA")
             
             // Disable click listener to prevent multiple requests simultaneously in flight
             it.isEnabled = false
 
-            if (isLegacy) {
-                // LEGACY HAL: Fake photo capture with realistic UX
-                Log.d(TAG, "=== FAKE PHOTO CAPTURE (Legacy HAL) ===")
+            val useFakeCapture = isLegacy || FORCE_FAKE_PHOTO_DATA
+            
+            if (useFakeCapture) {
+                // FAKE CAPTURE: Legacy HAL devices or Regular Android with forced fake data
+                val reason = if (isLegacy) "Legacy HAL device" else "FORCE_FAKE_PHOTO_DATA enabled"
+                Log.d(TAG, "=== FAKE PHOTO CAPTURE ($reason) ===")
                 handleFakePhotoCapture(it)
             } else {
-                // REGULAR ANDROID: Real photo capture with ImageReader
+                // REAL CAPTURE: Regular Android with real photo capture
                 Log.d(TAG, "=== REAL PHOTO CAPTURE (Regular Android) ===")
                 handleRealPhotoCapture(it)
             }
@@ -693,12 +793,19 @@ class CameraFragment : Fragment() {
     /**
      * Handle real photo capture for regular Android devices:
      * - Verify ImageReader is configured
-     * - Take actual photo using ImageReader
-     * - Save photo to disk
-     * - Call onPhotoCaptured() with real data
+     * - Take actual photo using ImageReader (if FORCE_FAKE_PHOTO_DATA is false)
+     * - Save photo to disk (if FORCE_FAKE_PHOTO_DATA is false)
+     * - Call onPhotoCaptured() with real or fake data based on FORCE_FAKE_PHOTO_DATA flag
      * - Re-enable capture button
      */
     private fun handleRealPhotoCapture(captureButton: View) {
+        // Check if we should use fake data even on regular Android
+        if (FORCE_FAKE_PHOTO_DATA) {
+            Log.d(TAG, "FORCE_FAKE_PHOTO_DATA enabled - using fake data on regular Android device")
+            handleFakePhotoCapture(captureButton)
+            return
+        }
+        
         // ImageReader should already be configured during initialization for regular Android devices
         if (!stillCaptureConfigured) {
             Log.w(TAG, "Still capture not configured - this should not happen on regular Android! Setting up now...")
@@ -1162,19 +1269,19 @@ class CameraFragment : Fragment() {
         // - Returning from background (recent apps)
         // - Unlocking phone
         // - Returning from another app
-        if (::fragmentCameraBinding.isInitialized && 
+        if (_fragmentCameraBinding != null && 
             fragmentCameraBinding.viewFinder.isAvailable) {
             
             Log.d(TAG, "TextureView available, checking camera state...")
             
-            if (::camera.isInitialized && !camera.isOpened()) {
-                Log.d(TAG, "Camera was closed, reinitializing...")
-                initializeCamera()
-            } else if (!::camera.isInitialized) {
-                Log.d(TAG, "Camera not initialized, starting fresh...")
+            // Check if camera is functional
+            val cameraFunctional = isCameraOpened()
+            
+            if (!cameraFunctional) {
+                Log.d(TAG, "Camera not functional, reinitializing...")
                 initializeCamera()
             } else {
-                Log.d(TAG, "Camera still open and functional")
+                Log.d(TAG, "Camera is functional, no reinitialization needed")
             }
         } else {
             Log.d(TAG, "TextureView not available yet, will initialize when surface becomes available")
@@ -1191,8 +1298,21 @@ class CameraFragment : Fragment() {
         // - Locking phone  
         // - Switching to another app
         try {
-            if (::camera.isInitialized && camera.isOpened()) {
+            if (::camera.isInitialized && isCameraOpened()) {
                 Log.d(TAG, "Closing camera due to onPause...")
+                
+                // Close session first if it exists
+                if (::session.isInitialized) {
+                    Log.d(TAG, "Closing capture session...")
+                    try {
+                        session.close()
+                        Log.d(TAG, "Capture session closed")
+                    } catch (exc: Exception) {
+                        Log.e(TAG, "Error closing session", exc)
+                    }
+                }
+                
+                // Then close camera
                 camera.close()
                 Log.d(TAG, "Camera closed successfully in onPause")
             }
@@ -1238,16 +1358,5 @@ class CameraFragment : Fragment() {
             val sdf = SimpleDateFormat("yyyy_MM_dd_HH_mm_ss_SSS", Locale.US)
             return File(context.filesDir, "IMG_${sdf.format(Date())}.$extension")
         }
-    }
-}
-
-/**
- * Extension function to safely check if camera device is still opened
- */
-private fun CameraDevice?.isOpened(): Boolean {
-    return try {
-        this?.id != null
-    } catch (e: Exception) {
-        false
     }
 }
