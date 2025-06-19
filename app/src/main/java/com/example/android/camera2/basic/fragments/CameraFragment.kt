@@ -157,12 +157,28 @@ class CameraFragment : Fragment() {
     // This applies auto white balance and color correction to both preview and still capture
     private val ENABLE_COLOR_CORRECTION = true
     
-    // COLOR FIX: White balance mode options (try different ones if purple tint persists)
-    // DAYLIGHT - Good for outdoor lighting and reducing purple tint
-    // INCANDESCENT - Good for indoor/artificial lighting  
-    // FLUORESCENT - Good for fluorescent lighting
-    // AUTO - Let camera decide (may still have purple tint)
-    private val COLOR_AWB_MODE = CaptureRequest.CONTROL_AWB_MODE_DAYLIGHT
+    // COLOR FIX: Detect if we're on a legacy HAL device (like Raspberry Pi) vs regular Android
+    private fun isLegacyHalDevice(): Boolean {
+        return try {
+            // Check if camera ID is non-standard (like "1000" on Raspberry Pi)
+            val cameraId = availableCameraId
+            val isNonStandard = cameraId != "0" && cameraId != "1"
+            Log.d(TAG, "Device type detection: Camera ID = '$cameraId', Legacy HAL = $isNonStandard")
+            isNonStandard
+        } catch (e: Exception) {
+            Log.w(TAG, "Could not determine device type, defaulting to regular Android: ${e.message}")
+            false
+        }
+    }
+    
+    // COLOR FIX: Get appropriate white balance mode for device type
+    private fun getColorAwbMode(): Int {
+        return if (isLegacyHalDevice()) {
+            CaptureRequest.CONTROL_AWB_MODE_DAYLIGHT  // Aggressive for Raspberry Pi
+        } else {
+            CaptureRequest.CONTROL_AWB_MODE_AUTO      // Conservative for regular Android
+        }
+    }
 
     override fun onCreateView(
             inflater: LayoutInflater,
@@ -178,7 +194,8 @@ class CameraFragment : Fragment() {
         }
         
         if (ENABLE_COLOR_CORRECTION) {
-            Log.d(TAG, "COLOR FIX: ENABLED (AGGRESSIVE mode - fixes purple tint on Raspberry Pi cameras)")
+            val deviceType = if (isLegacyHalDevice()) "Legacy HAL (aggressive settings)" else "Regular Android (conservative settings)"
+            Log.d(TAG, "COLOR FIX: ENABLED for $deviceType")
         } else {
             Log.d(TAG, "COLOR FIX: DISABLED")
         }
@@ -413,29 +430,38 @@ class CameraFragment : Fragment() {
                 // COLOR FIX: Add white balance and color correction for Raspberry Pi cameras
                 // This fixes the common purple/magenta tint issue on IMX219 cameras
                 if (ENABLE_COLOR_CORRECTION) {
-                    Log.d(TAG, "COLOR FIX: Applying AGGRESSIVE white balance and color correction")
+                    val isLegacy = isLegacyHalDevice()
+                    if (isLegacy) {
+                        Log.d(TAG, "COLOR FIX: Applying AGGRESSIVE settings for legacy HAL device")
+                        
+                        // Aggressive settings for Raspberry Pi / legacy HAL
+                        set(CaptureRequest.CONTROL_AWB_MODE, getColorAwbMode())
+                        set(CaptureRequest.COLOR_CORRECTION_MODE, CaptureRequest.COLOR_CORRECTION_MODE_TRANSFORM_MATRIX)
+                        set(CaptureRequest.CONTROL_SCENE_MODE, CaptureRequest.CONTROL_SCENE_MODE_DISABLED)
+                        set(CaptureRequest.CONTROL_EFFECT_MODE, CaptureRequest.CONTROL_EFFECT_MODE_OFF)
+                    } else {
+                        Log.d(TAG, "COLOR FIX: Applying CONSERVATIVE settings for regular Android device")
+                        
+                        // Conservative settings for regular Android devices
+                        set(CaptureRequest.CONTROL_AWB_MODE, getColorAwbMode())
+                        set(CaptureRequest.COLOR_CORRECTION_MODE, CaptureRequest.COLOR_CORRECTION_MODE_FAST)
+                        // Don't set scene mode for regular devices - let them use default
+                    }
                     
-                    // Try more aggressive white balance modes
-                    set(CaptureRequest.CONTROL_AWB_MODE, COLOR_AWB_MODE)
-                    set(CaptureRequest.COLOR_CORRECTION_MODE, CaptureRequest.COLOR_CORRECTION_MODE_TRANSFORM_MATRIX)
-                    
-                    // Enhanced exposure and scene settings
+                    // Common settings for both device types
                     set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_ON)
                     set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE)
-                    set(CaptureRequest.CONTROL_SCENE_MODE, CaptureRequest.CONTROL_SCENE_MODE_DISABLED)
-                    
-                    // Additional color correction parameters
                     set(CaptureRequest.CONTROL_MODE, CaptureRequest.CONTROL_MODE_AUTO)
-                    set(CaptureRequest.CONTROL_EFFECT_MODE, CaptureRequest.CONTROL_EFFECT_MODE_OFF)
                     
-                    val awbModeStr = when(COLOR_AWB_MODE) {
+                    val awbModeStr = when(getColorAwbMode()) {
                         CaptureRequest.CONTROL_AWB_MODE_DAYLIGHT -> "DAYLIGHT"
                         CaptureRequest.CONTROL_AWB_MODE_INCANDESCENT -> "INCANDESCENT"
                         CaptureRequest.CONTROL_AWB_MODE_FLUORESCENT -> "FLUORESCENT"
                         CaptureRequest.CONTROL_AWB_MODE_AUTO -> "AUTO"
                         else -> "UNKNOWN"
                     }
-                    Log.d(TAG, "COLOR FIX: Applied $awbModeStr white balance + TRANSFORM_MATRIX color correction")
+                    val deviceType = if (isLegacy) "Legacy HAL" else "Regular Android"
+                    Log.d(TAG, "COLOR FIX: Applied $awbModeStr white balance for $deviceType device")
                 } else {
                     Log.d(TAG, "COLOR FIX: Skipped (disabled)")
                 }
@@ -759,29 +785,38 @@ class CameraFragment : Fragment() {
             // COLOR FIX: Add white balance and color correction for Raspberry Pi cameras
             // This ensures captured photos have the same color correction as preview
             if (ENABLE_COLOR_CORRECTION) {
-                Log.d(TAG, "COLOR FIX: Applying AGGRESSIVE white balance and color correction to still capture")
+                val isLegacy = isLegacyHalDevice()
+                if (isLegacy) {
+                    Log.d(TAG, "COLOR FIX: Applying AGGRESSIVE settings for legacy HAL device")
+                    
+                    // Aggressive settings for Raspberry Pi / legacy HAL
+                    set(CaptureRequest.CONTROL_AWB_MODE, getColorAwbMode())
+                    set(CaptureRequest.COLOR_CORRECTION_MODE, CaptureRequest.COLOR_CORRECTION_MODE_TRANSFORM_MATRIX)
+                    set(CaptureRequest.CONTROL_SCENE_MODE, CaptureRequest.CONTROL_SCENE_MODE_DISABLED)
+                    set(CaptureRequest.CONTROL_EFFECT_MODE, CaptureRequest.CONTROL_EFFECT_MODE_OFF)
+                } else {
+                    Log.d(TAG, "COLOR FIX: Applying CONSERVATIVE settings for regular Android device")
+                    
+                    // Conservative settings for regular Android devices
+                    set(CaptureRequest.CONTROL_AWB_MODE, getColorAwbMode())
+                    set(CaptureRequest.COLOR_CORRECTION_MODE, CaptureRequest.COLOR_CORRECTION_MODE_FAST)
+                    // Don't set scene mode for regular devices - let them use default
+                }
                 
-                // Same aggressive white balance as preview
-                set(CaptureRequest.CONTROL_AWB_MODE, COLOR_AWB_MODE)
-                set(CaptureRequest.COLOR_CORRECTION_MODE, CaptureRequest.COLOR_CORRECTION_MODE_TRANSFORM_MATRIX)
-                
-                // Enhanced exposure and scene settings for photos
+                // Common settings for both device types
                 set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_ON)
                 set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_AUTO)
-                set(CaptureRequest.CONTROL_SCENE_MODE, CaptureRequest.CONTROL_SCENE_MODE_DISABLED)
-                
-                // Additional color correction parameters
                 set(CaptureRequest.CONTROL_MODE, CaptureRequest.CONTROL_MODE_AUTO)
-                set(CaptureRequest.CONTROL_EFFECT_MODE, CaptureRequest.CONTROL_EFFECT_MODE_OFF)
                 
-                val awbModeStr = when(COLOR_AWB_MODE) {
+                val awbModeStr = when(getColorAwbMode()) {
                     CaptureRequest.CONTROL_AWB_MODE_DAYLIGHT -> "DAYLIGHT"
                     CaptureRequest.CONTROL_AWB_MODE_INCANDESCENT -> "INCANDESCENT"
                     CaptureRequest.CONTROL_AWB_MODE_FLUORESCENT -> "FLUORESCENT"
                     CaptureRequest.CONTROL_AWB_MODE_AUTO -> "AUTO"
                     else -> "UNKNOWN"
                 }
-                Log.d(TAG, "COLOR FIX: Applied $awbModeStr white balance + TRANSFORM_MATRIX to still capture")
+                val deviceType = if (isLegacy) "Legacy HAL" else "Regular Android"
+                Log.d(TAG, "COLOR FIX: Applied $awbModeStr white balance for $deviceType device")
             } else {
                 Log.d(TAG, "COLOR FIX: Skipped for still capture (disabled)")
             }

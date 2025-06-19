@@ -170,29 +170,31 @@ If your camera preview shows a purple/magenta tint (common on Raspberry Pi camer
 private val ENABLE_COLOR_CORRECTION = true
 ```
 
-This applies automatic white balance and color correction to fix the common IMX219 camera color issues on legacy HAL devices.
+The app automatically detects device type and applies appropriate settings:
 
-#### Advanced Color Correction
+- **Legacy HAL devices** (Raspberry Pi, camera ID "1000"): Aggressive color correction with TRANSFORM_MATRIX mode
+- **Regular Android devices** (camera ID "0", "1"): Conservative color correction with FAST mode
 
-If the purple tint persists, try different white balance modes in `CameraFragment.kt`:
+#### Device Detection
+
+The app detects legacy HAL devices by checking camera ID:
+- Camera ID "1000" → Legacy HAL (aggressive settings)
+- Camera ID "0" or "1" → Regular Android (conservative settings)
+
+This ensures compatibility with both Emteria OS/Raspberry Pi and standard Android devices.
+
+#### Manual Override
+
+To force specific white balance modes, modify the `getColorAwbMode()` function in `CameraFragment.kt`:
 
 ```kotlin
-// Try different white balance modes for stubborn purple tint:
-private val COLOR_AWB_MODE = CaptureRequest.CONTROL_AWB_MODE_DAYLIGHT      // Default (good for outdoor)
-private val COLOR_AWB_MODE = CaptureRequest.CONTROL_AWB_MODE_INCANDESCENT  // Try for indoor lighting  
-private val COLOR_AWB_MODE = CaptureRequest.CONTROL_AWB_MODE_FLUORESCENT   // Try for fluorescent lights
-private val COLOR_AWB_MODE = CaptureRequest.CONTROL_AWB_MODE_AUTO          // Original auto mode
+private fun getColorAwbMode(): Int {
+    return CaptureRequest.CONTROL_AWB_MODE_DAYLIGHT      // Force DAYLIGHT
+    // return CaptureRequest.CONTROL_AWB_MODE_AUTO       // Force AUTO
+    // return CaptureRequest.CONTROL_AWB_MODE_INCANDESCENT  // Force INCANDESCENT
+    // return CaptureRequest.CONTROL_AWB_MODE_FLUORESCENT   // Force FLUORESCENT
+}
 ```
-
-The aggressive mode uses `COLOR_CORRECTION_MODE_TRANSFORM_MATRIX` with enhanced exposure and scene controls for maximum color correction strength.
-
-#### Last Resort: Manual Color Temperature
-
-If all automatic modes still show purple tint, you may need manual color temperature control (requires more advanced implementation):
-
-- **Cool lighting (purple tint)**: Try warmer color temperature (~5500K-6500K)
-- **Warm lighting (yellow tint)**: Try cooler color temperature (~3000K-4000K)
-- **Hardware calibration**: Some cameras may need firmware-level color calibration
 
 ### Layout Customization
 
