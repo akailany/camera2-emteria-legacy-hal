@@ -161,6 +161,39 @@ private val CAMERA_IS_UPSIDE_DOWN = true
 
 This fixes both preview display AND saved photo orientation.
 
+### Color Correction (Purple Tint Fix)
+
+If your camera preview shows a purple/magenta tint (common on Raspberry Pi cameras), enable this fix:
+
+```kotlin
+// Set to true to fix purple/magenta tint on Raspberry Pi cameras
+private val ENABLE_COLOR_CORRECTION = true
+```
+
+This applies automatic white balance and color correction to fix the common IMX219 camera color issues on legacy HAL devices.
+
+#### Advanced Color Correction
+
+If the purple tint persists, try different white balance modes in `CameraFragment.kt`:
+
+```kotlin
+// Try different white balance modes for stubborn purple tint:
+private val COLOR_AWB_MODE = CaptureRequest.CONTROL_AWB_MODE_DAYLIGHT      // Default (good for outdoor)
+private val COLOR_AWB_MODE = CaptureRequest.CONTROL_AWB_MODE_INCANDESCENT  // Try for indoor lighting  
+private val COLOR_AWB_MODE = CaptureRequest.CONTROL_AWB_MODE_FLUORESCENT   // Try for fluorescent lights
+private val COLOR_AWB_MODE = CaptureRequest.CONTROL_AWB_MODE_AUTO          // Original auto mode
+```
+
+The aggressive mode uses `COLOR_CORRECTION_MODE_TRANSFORM_MATRIX` with enhanced exposure and scene controls for maximum color correction strength.
+
+#### Last Resort: Manual Color Temperature
+
+If all automatic modes still show purple tint, you may need manual color temperature control (requires more advanced implementation):
+
+- **Cool lighting (purple tint)**: Try warmer color temperature (~5500K-6500K)
+- **Warm lighting (yellow tint)**: Try cooler color temperature (~3000K-4000K)
+- **Hardware calibration**: Some cameras may need firmware-level color calibration
+
 ### Layout Customization
 
 - **Portrait Layout**: `app/src/main/res/layout/fragment_camera.xml`
@@ -261,6 +294,7 @@ adb logcat | grep "CameraFragment"
 | Camera ID not found | Check `discoverAvailableCamera()` logs |
 | CAMERA_IN_USE error | Verify single-surface session configuration |
 | Preview upside down | Set `CAMERA_IS_UPSIDE_DOWN = true` |
+| Purple/magenta tint | Set `ENABLE_COLOR_CORRECTION = true` |
 | Photos stretched | Check aspect ratio matrix transformations |
 | App crashes on capture | Review ImageReader setup in logs |
 

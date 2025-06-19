@@ -67,9 +67,9 @@ class AutoFitTextureView @JvmOverloads constructor(
     private fun updateSurfaceTextureBufferSize() {
         if (cameraWidth > 0 && cameraHeight > 0 && surfaceTexture != null) {
             surfaceTexture?.setDefaultBufferSize(cameraWidth, cameraHeight)
-            Log.d(TAG, "✅ SurfaceTexture buffer size set to: ${cameraWidth} x ${cameraHeight}")
+            Log.d(TAG, "SurfaceTexture buffer size set to: ${cameraWidth} x ${cameraHeight}")
         } else {
-            Log.d(TAG, "⏳ Waiting for surface texture or camera dimensions (width=$cameraWidth, height=$cameraHeight, surfaceTexture=${surfaceTexture != null})")
+            Log.d(TAG, "Waiting for surface texture or camera dimensions (width=$cameraWidth, height=$cameraHeight, surfaceTexture=${surfaceTexture != null})")
         }
     }
 

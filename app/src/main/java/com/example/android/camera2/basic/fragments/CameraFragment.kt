@@ -152,6 +152,17 @@ class CameraFragment : Fragment() {
     // UPSIDE DOWN FIX: Set to true if your camera preview is upside down
     // This now fixes BOTH preview (via TextureView matrix) AND saved photos (via JPEG_ORIENTATION)
     private val CAMERA_IS_UPSIDE_DOWN = false
+    
+    // COLOR FIX: Set to true to fix purple/magenta tint on Raspberry Pi cameras
+    // This applies auto white balance and color correction to both preview and still capture
+    private val ENABLE_COLOR_CORRECTION = true
+    
+    // COLOR FIX: White balance mode options (try different ones if purple tint persists)
+    // DAYLIGHT - Good for outdoor lighting and reducing purple tint
+    // INCANDESCENT - Good for indoor/artificial lighting  
+    // FLUORESCENT - Good for fluorescent lighting
+    // AUTO - Let camera decide (may still have purple tint)
+    private val COLOR_AWB_MODE = CaptureRequest.CONTROL_AWB_MODE_DAYLIGHT
 
     override fun onCreateView(
             inflater: LayoutInflater,
@@ -161,9 +172,15 @@ class CameraFragment : Fragment() {
         Log.d(TAG, "=== FRAGMENT onCreateView ===")
         
         if (CAMERA_IS_UPSIDE_DOWN) {
-            Log.d(TAG, "🔄 UPSIDE DOWN FIX: ENABLED (affects preview + saved photos)")
+            Log.d(TAG, "UPSIDE DOWN FIX: ENABLED (affects preview + saved photos)")
         } else {
-            Log.d(TAG, "🔄 UPSIDE DOWN FIX: DISABLED")
+            Log.d(TAG, "UPSIDE DOWN FIX: DISABLED")
+        }
+        
+        if (ENABLE_COLOR_CORRECTION) {
+            Log.d(TAG, "COLOR FIX: ENABLED (AGGRESSIVE mode - fixes purple tint on Raspberry Pi cameras)")
+        } else {
+            Log.d(TAG, "COLOR FIX: DISABLED")
         }
         
         _fragmentCameraBinding = FragmentCameraBinding.inflate(inflater, container, false)
@@ -261,19 +278,19 @@ class CameraFragment : Fragment() {
             
             // ASPECT RATIO FIX: Apply height compression without affecting width
             // This maintains full screen width while reducing vertical stretching
-            Log.d(TAG, "🔧 ASPECT RATIO FIX: Compressing height to 60% (more aggressive)")
+            Log.d(TAG, "ASPECT RATIO FIX: Compressing height to 60% (more aggressive)")
             matrix.postScale(1.0f, 0.6f, viewWidth / 2, viewHeight / 2)
             
             // UPSIDE DOWN FIX: Conditionally apply 180° rotation
             if (CAMERA_IS_UPSIDE_DOWN) {
-                Log.d(TAG, "🔄 UPSIDE DOWN FIX: Applying 180° rotation")
+                Log.d(TAG, "UPSIDE DOWN FIX: Applying 180° rotation")
                 matrix.postRotate(180f, viewWidth / 2, viewHeight / 2)
             } else {
-                Log.d(TAG, "🔄 UPSIDE DOWN FIX: Skipped (disabled)")
+                Log.d(TAG, "UPSIDE DOWN FIX: Skipped (disabled)")
             }
             
             fragmentCameraBinding.viewFinder.setTransform(matrix)
-            Log.d(TAG, "✅ Transformations applied: height=60%, width=100%")
+            Log.d(TAG, "Transformations applied: height=60%, width=100%")
             
         } catch (exc: Exception) {
             Log.e(TAG, "Failed to apply transformations", exc)
@@ -393,9 +410,39 @@ class CameraFragment : Fragment() {
                     CameraDevice.TEMPLATE_PREVIEW).apply { 
                 addTarget(previewSurface)
                 
+                // COLOR FIX: Add white balance and color correction for Raspberry Pi cameras
+                // This fixes the common purple/magenta tint issue on IMX219 cameras
+                if (ENABLE_COLOR_CORRECTION) {
+                    Log.d(TAG, "COLOR FIX: Applying AGGRESSIVE white balance and color correction")
+                    
+                    // Try more aggressive white balance modes
+                    set(CaptureRequest.CONTROL_AWB_MODE, COLOR_AWB_MODE)
+                    set(CaptureRequest.COLOR_CORRECTION_MODE, CaptureRequest.COLOR_CORRECTION_MODE_TRANSFORM_MATRIX)
+                    
+                    // Enhanced exposure and scene settings
+                    set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_ON)
+                    set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE)
+                    set(CaptureRequest.CONTROL_SCENE_MODE, CaptureRequest.CONTROL_SCENE_MODE_DISABLED)
+                    
+                    // Additional color correction parameters
+                    set(CaptureRequest.CONTROL_MODE, CaptureRequest.CONTROL_MODE_AUTO)
+                    set(CaptureRequest.CONTROL_EFFECT_MODE, CaptureRequest.CONTROL_EFFECT_MODE_OFF)
+                    
+                    val awbModeStr = when(COLOR_AWB_MODE) {
+                        CaptureRequest.CONTROL_AWB_MODE_DAYLIGHT -> "DAYLIGHT"
+                        CaptureRequest.CONTROL_AWB_MODE_INCANDESCENT -> "INCANDESCENT"
+                        CaptureRequest.CONTROL_AWB_MODE_FLUORESCENT -> "FLUORESCENT"
+                        CaptureRequest.CONTROL_AWB_MODE_AUTO -> "AUTO"
+                        else -> "UNKNOWN"
+                    }
+                    Log.d(TAG, "COLOR FIX: Applied $awbModeStr white balance + TRANSFORM_MATRIX color correction")
+                } else {
+                    Log.d(TAG, "COLOR FIX: Skipped (disabled)")
+                }
+                
                 // UPSIDE DOWN FIX: Apply 180° rotation if camera is upside down
                 if (CAMERA_IS_UPSIDE_DOWN) {
-                    Log.d(TAG, "🔄 UPSIDE DOWN FIX: Applying 180° rotation to preview capture")
+                    Log.d(TAG, "UPSIDE DOWN FIX: Applying 180° rotation to preview capture")
                     Log.d(TAG, "NOTE: Preview is rotated via TextureView matrix, this affects saved photos")
                     set(CaptureRequest.JPEG_ORIENTATION, 180)
                 }
@@ -709,9 +756,39 @@ class CameraFragment : Fragment() {
                 CameraDevice.TEMPLATE_STILL_CAPTURE).apply { 
             addTarget(imageReader.surface)
             
+            // COLOR FIX: Add white balance and color correction for Raspberry Pi cameras
+            // This ensures captured photos have the same color correction as preview
+            if (ENABLE_COLOR_CORRECTION) {
+                Log.d(TAG, "COLOR FIX: Applying AGGRESSIVE white balance and color correction to still capture")
+                
+                // Same aggressive white balance as preview
+                set(CaptureRequest.CONTROL_AWB_MODE, COLOR_AWB_MODE)
+                set(CaptureRequest.COLOR_CORRECTION_MODE, CaptureRequest.COLOR_CORRECTION_MODE_TRANSFORM_MATRIX)
+                
+                // Enhanced exposure and scene settings for photos
+                set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_ON)
+                set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_AUTO)
+                set(CaptureRequest.CONTROL_SCENE_MODE, CaptureRequest.CONTROL_SCENE_MODE_DISABLED)
+                
+                // Additional color correction parameters
+                set(CaptureRequest.CONTROL_MODE, CaptureRequest.CONTROL_MODE_AUTO)
+                set(CaptureRequest.CONTROL_EFFECT_MODE, CaptureRequest.CONTROL_EFFECT_MODE_OFF)
+                
+                val awbModeStr = when(COLOR_AWB_MODE) {
+                    CaptureRequest.CONTROL_AWB_MODE_DAYLIGHT -> "DAYLIGHT"
+                    CaptureRequest.CONTROL_AWB_MODE_INCANDESCENT -> "INCANDESCENT"
+                    CaptureRequest.CONTROL_AWB_MODE_FLUORESCENT -> "FLUORESCENT"
+                    CaptureRequest.CONTROL_AWB_MODE_AUTO -> "AUTO"
+                    else -> "UNKNOWN"
+                }
+                Log.d(TAG, "COLOR FIX: Applied $awbModeStr white balance + TRANSFORM_MATRIX to still capture")
+            } else {
+                Log.d(TAG, "COLOR FIX: Skipped for still capture (disabled)")
+            }
+            
             // UPSIDE DOWN FIX: Apply same 180° rotation to still capture
             if (CAMERA_IS_UPSIDE_DOWN) {
-                Log.d(TAG, "🔄 UPSIDE DOWN FIX: Applying 180° rotation to still capture")
+                Log.d(TAG, "UPSIDE DOWN FIX: Applying 180° rotation to still capture")
                 set(CaptureRequest.JPEG_ORIENTATION, 180)
             }
         }
